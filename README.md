@@ -18,11 +18,13 @@
 
 | 能力 | 命令 | 说明 |
 |---|---|---|
-| 摸清结构 | `drive.mjs init <课程URL>` | 解析 `courseid/clazzid/cpi/enc`，补齐 §章节跳转所需的 `oldenc` |
+| 免反复授权 | `relay.mjs` | CDP 常驻中继：只跟 Chrome 建一条连接，脚本统一连本地 `:9333`，不再每条命令都弹「允许调试」 |
+| 摸清结构 | `drive.mjs init <课程URL>` | 解析 `courseid/clazzid/cpi/enc/t` 并存原始首页，补齐 §章节跳转所需的 `oldenc` |
 | 读进度 | `drive.mjs verify` | N/M + 绿勾 + 待完成清单，输出 `todo.json` |
 | 学章节 | `drive.mjs run` | 逐小节处理多卡片、多任务点，支持 `--only` / `--max` / `--pass` |
 | 补绿勾 | `drive.mjs visit` | 打开无任务点的小节 |
-| 章节测验 | `quizcard.mjs open/dump/shot/fill/submit` | 三层 iframe 结构定位，题面混淆只能截图视觉读题 |
+| 章节测验 | `quizcard.mjs open/dump/shot/fill/filltext/submit/result/modify` | 三层 iframe 结构定位；题面混淆只能截图视觉读题；支持 UEditor 简答题与重做 |
+| 收尾核查 | `course-todo.mjs` | 作业列表 + 考试列表（独立入口，章节全绿也可能漏交） |
 | 作业列表 | `chaoxing.mjs works/quiz/fill/submit/review/redo` | 交卷后用 `review` 抓官方标准答案核对 |
 
 ---
@@ -58,7 +60,15 @@ git clone https://github.com/SamBUFF/chaoxing-labor-course.git \
 ```bash
 # 先确认 CDP 可用（路径按自己的 web-access 安装位置调整）
 node "$HOME/.workbuddy/skills/web-access/scripts/check-deps.mjs"
+
+# 再起 CDP 常驻中继（强烈建议，否则每条命令都要手动点一次「允许调试」）
+# 用后台/常驻方式运行，日志写到 ./.chaoxing/relay.log
+node "$HOME/.workbuddy/skills/chaoxing-labor-course/scripts/relay.mjs"
 ```
+
+`lib-cdp.mjs` 的连接顺序是 `CX_CDP_WS` 环境变量 → 本地中继 `ws://127.0.0.1:9333` → 直连 Chrome。
+中继没起时会自动回落直连，行为与旧版一致；起了之后所有脚本自动走中继，无需改任何调用。
+浏览器 / 工具重启后中继会退出，重新起一次即可（那一次仍要点一下允许）。
 
 > Windows 上 CDP proxy 会随发起它的 shell 一起被回收。若遇到 `upstream connect failed ... 10061`，用后台常驻方式起：
 > `node ".../check-deps.mjs"; echo KEEPER; node -e "setInterval(function(){},60000)"`
@@ -81,12 +91,17 @@ node "$SK/scripts/drive.mjs" visit          # 补无任务点小节的绿勾
 
 # 3. 章节测验（题面被 font-cxsecret 混淆，需截图读题）
 node "$SK/scripts/quizcard.mjs" open 984632362
-node "$SK/scripts/quizcard.mjs" shot 3      # → .chaoxing/q3.png
-node "$SK/scripts/quizcard.mjs" fill answers.json
+node "$SK/scripts/quizcard.mjs" shot all     # 整套题逐题截图 → .chaoxing/q1.png ...
+node "$SK/scripts/quizcard.mjs" fill answers.json          # {"1":"D","6":"AC","9":"对"}
+node "$SK/scripts/quizcard.mjs" filltext 14 a14.txt        # 第 14 题是简答题时写文本
 node "$SK/scripts/quizcard.mjs" submit --yes
+node "$SK/scripts/quizcard.mjs" result                     # 每题「我的答案 + 得分」
+node "$SK/scripts/quizcard.mjs" modify --yes               # 有「修改答案」入口时可重做
 
-# 4. 收尾核对
+# 4. 收尾核对（章节全绿 ≠ 整门课完成）
 node "$SK/scripts/drive.mjs" verify
+node "$SK/scripts/drive.mjs" visit
+node "$SK/scripts/course-todo.mjs"           # 作业列表 + 考试列表
 ```
 
 状态与产物统一写在**当前工作目录**的 `./.chaoxing/`。
@@ -96,15 +111,18 @@ node "$SK/scripts/drive.mjs" verify
 ## 目录结构
 
 ```
-SKILL.md                      # Agent 读的流程主文件（含命令速查、陷阱）
+SKILL.md                      # Agent 读的流程主文件（含命令速查、排错速查、陷阱）
 references/
   chaoxing-dom.md             # 页面结构、选择器、解析失败排查
   labor-course-bank.md        # 劳动教育课已核验的答案与知识点
+  ideology-law-bank.md        # 思想道德与法治课已核验的答案（含反直觉题校准）
 scripts/
+  relay.mjs                   # CDP 常驻中继（免去反复的「允许调试」授权）
   drive.mjs                   # 章节任务点主驱动（原生 CDP，自建工作 tab）
-  quizcard.mjs                # 章节卡片内测验
+  quizcard.mjs                # 章节卡片内测验（含简答题 / 重做 / 结果回读）
+  course-todo.mjs             # 收尾核查：作业列表 + 考试列表
   chaoxing.mjs                # 作业列表流程（走 web-access proxy）
-  lib-cdp.mjs                 # CDP 连接与焦点模拟等通用原语
+  lib-cdp.mjs                 # CDP 连接、中继回落、焦点模拟等通用原语
 ```
 
 ---
@@ -112,6 +130,7 @@ scripts/
 ## 已知限制
 
 - **题干与选项被混淆**：章节测验由服务端下发 `font-cxsecret` 乱码文本，`fetch` 重取原文也拿不到明文，只能截图视觉读题；多选题的 `aria-label` 是明文，可用于交叉校验。
+- **保活只在 `run` 存活期间存在**：`Emulation.setFocusEmulationEnabled` 挂在 CDP 会话上，`open/shot/fill/submit` 这类短连接命令办完就断开、焦点模拟随之释放，属正常现象。真正防暂停的是 `run` 内部的 500ms 心跳。
 - 播放器回写完成标记有延迟，单条播完可能显示"待目录核对"，以 `verify` 的 N/M 为准。
 - 平台改版会导致选择器失效，先读 `references/chaoxing-dom.md` 再动代码。
 

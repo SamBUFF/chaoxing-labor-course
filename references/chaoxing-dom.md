@@ -78,3 +78,18 @@ studentstudy（父页）
 13. **题干/选项有 `font-cxsecret` 字符混淆**：服务端下发的 HTML 就是混淆文本（`fetch` 重取原文也拿不到明文），只能截图用视觉读题；多选题的 `aria-label` 是明文，可交叉校验。
 14. **章节卡测验 ≠ 作业列表作业**：只有从章节卡入口交卷才点亮任务点，作业列表交满分也不会点亮。
 15. `web-access` proxy 会长期 attach 它创建的 tab，此后从其他连接再 `Target.attachToTarget` 会报 `No target with given id found`；驱动脚本应 `Target.createTarget` 自建 tab 并独占。
+
+## 2026-10-27 补充（思想道德与法治课实测）
+
+| 部位 | 选择器 / 说明 |
+|---|---|
+| 交卷确认弹窗（本课） | 顶层 `a.jb_btn#popok`（取消是 `#popno`）；出现有 3~5s 延迟，必须轮询 |
+| 交卷触发 | 内层 `window.btnBlueSubmit()`，比 `a.click()` 可靠；内部有 `reqLimit` 计数，耗尽会提示「请刷新页面后重试」 |
+| 简答/论述题 | `.TiMu` 内 `iframe#ueditor_0`（UEditor），正文写 `contentDocument.body.innerHTML`；真值是同级 `textarea#answer{qid}`，需触发 `UE.instants[*].sync()` |
+| 结果页「修改答案」 | 内层文本为「修改答案」的 `<a>`；部分测验有（可重做），部分没有（一次定分）。**重做会清空 UEditor 简答文本** |
+| 结果页判定 | 「待完成」= 未交；「已完成 / 第N次作答 / 本次成绩X分」= 已交；「待批阅」= 有主观题等教师批阅 |
+| 课程首页导航 | `span.nav_content`（文本「作业 / 考试 / 章节…」），点击后页面自己生成带 `enc/stuenc/t` 的 iframe src；手拼 `work/list` URL 容易 404 或「无效的参数」 |
+
+16. **截图读题要加宽视口**：默认工作 tab 视口可能只有约 758×486 且横向滚动，吸顶头和左缘悬浮工具条会挡住题干。先 `Emulation.setDeviceMetricsOverride({width:1500,height:1200,deviceScaleFactor:1,mobile:false})`，再 `scrollIntoView` 后回退约 190px，即可完整读题。
+17. **每次新建 CDP WebSocket 都会触发 Chrome「允许调试」授权**：用 `scripts/relay.mjs` 常驻一条上游连接，脚本统一走 `ws://127.0.0.1:9333`，`lib-cdp.mjs` 已自动优先中继、失败回落直连。
+18. **部分「专题测验」不单独计任务点**：随章节任务点一起判完成，`verify` 不列出就不用单独做。

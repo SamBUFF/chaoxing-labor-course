@@ -293,6 +293,8 @@ if (mode === 'init') {
     clazzid: q.get('clazzid') || q.get('classId'),
     cpi: q.get('cpi'),
     enc: q.get('enc'),
+    home: url, // 原始课程页 URL（含 t 时间戳），course-todo.mjs 复用
+    t: q.get('t') || '',
   };
   if (!st.courseid || !st.clazzid) { console.error('URL 里缺少 courseid/clazzid'); process.exit(1); }
   fs.mkdirSync(WORK, { recursive: true });

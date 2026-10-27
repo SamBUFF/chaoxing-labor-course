@@ -8,6 +8,10 @@
  * 关键能力：Emulation.setFocusEmulationEnabled(true)
  *   让后台 tab 的 document.visibilityState 变成 visible，视频不会因窗口被遮挡而暂停，
  *   也不需要 Page.bringToFront 抢用户焦点（焦点模拟随连接断开而失效，需每次连接后重设）。
+ *
+ * 连接顺序：CX_CDP_WS 环境变量 > 本地常驻中继 ws://127.0.0.1:9333 > 直连 Chrome 调试端口。
+ *   中继见 scripts/relay.mjs：只跟 Chrome 建一条长连接，避免每条命令都弹「允许调试」。
+ *   中继没起时会自动回落直连，行为与旧版一致。
  */
 import fs from 'node:fs';
 import os from 'node:os';
@@ -40,7 +44,23 @@ export function devtoolsWs() {
  * @param {string} targetFile 保存 targetId 的文件，便于下次复用
  */
 export async function connect(targetFile) {
-  const ws = new WebSocket(devtoolsWs());
+  // 优先走本地常驻中继（只跟 Chrome 建一次连接，避免每次都要点「允许调试」），失败再直连 Chrome
+  const cands = [];
+  if (process.env.CX_CDP_WS) {
+    cands.push(process.env.CX_CDP_WS);
+  } else {
+    cands.push('ws://127.0.0.1:9333');
+    try { cands.push(devtoolsWs()); } catch { /* 没有 DevToolsActivePort */ }
+  }
+  let lastErr;
+  for (const u of cands) {
+    try { return await openWs(u, targetFile); } catch (e) { lastErr = e; }
+  }
+  throw lastErr || new Error('没有可用的 CDP 连接（中继与调试端口都不可达）');
+}
+
+export async function openWs(wsUrl, targetFile) {
+  const ws = new WebSocket(wsUrl);
   let id = 0;
   const pending = new Map();
   const send = (method, params = {}, sessionId) => new Promise((res, rej) => {
