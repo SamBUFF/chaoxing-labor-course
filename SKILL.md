@@ -1,7 +1,7 @@
 ---
 name: chaoxing-labor-course
 description: 用于超星学习通 / 泛雅（mooc1.chaoxing.com、mooc2-ans.chaoxing.com）课程的全流程代办：按平台允许的倍速把章节视频任务点真实学完、把 PPT/PDF 类文档任务点走完阅读流程、把章节卡片里的测验作答提交，最后让整门课程目录全部显示绿勾。触发场景：用户丢来一个 chaoxing 课程页链接并说「把这门课程的章节都学习掉（学掉的会显示绿勾）」「把这一章的资料都学完」「8.2 的章节测试做一下」「学习通作业帮我做完」「劳动教育课刷完任务点」「完成这门课程」。默认不交卷，用户明确说「完成 / 提交 / 交掉 / 做一下」才提交。
-description_zh: 超星学习通课程自动化：多卡片小节逐个处理（视频真播放至完成 + PPT/PDF 任务点走阅读流程 + 章节测验作答），并补齐无任务点小节的访问，使整门课程目录全绿。适用于「视频/文档任务点 + 章节测验」结构的通识课、思政课、素养课。内置 CDP 常驻中继避免反复授权、简答题填写与作业/考试收尾核查。
+description_zh: 超星学习通课程自动化：多卡片小节逐个处理（视频真播放至完成 + PPT/PDF 任务点走阅读流程 + 章节测验作答），并补齐无任务点小节的访问，使整门课程目录全绿。适用于「视频/文档任务点 + 章节测验」结构的通识课、思政课、素养课。**必须单 tab 串行**——并行开第二个章节 tab 会触发「多终端登录」风控并把主 tab 跳到 detect 警告页（JS 永久挂起）。内置 CDP 常驻中继避免反复授权、简答题（UEditor）填写与作业/考试收尾核查。
 description_en: Automate Chaoxing (Xuexitong) course completion - handle multi-card sections (play videos to 100% at the platform's max allowed speed, complete PPT/PDF document taskpoints), answer chapter quizzes (including text answers), and open empty sections so the whole course catalog turns green. Built on a self-owned CDP tab with focus emulation and a persistent local CDP relay that avoids repeated debugging permission prompts.
 agent_created: true
 ---
@@ -20,13 +20,14 @@ agent_created: true
 | `scripts/course-todo.mjs` | 收尾核查作业列表 + 考试列表 | 同上 |
 | `scripts/chaoxing.mjs` | 作业列表（`work/list`）的拉题 / 交卷 / 抓标准答案 / 重做 | web-access proxy |
 
-## 五条硬边界
+## 六条硬边界
 
-1. **视频只真播，不跳进度、不伪造上报。** 平台完成条件是「观看时长 ≥ 总时长 90%」，倍速上限只有 **2x**（官方菜单 0.75/1/1.25/1.5/2）。设 4x 会被播放器立刻重置为 1x 并暂停。不要直接请求进度上报接口——会进「学习异常」记录，代价远大于省下的时间。
+1. **视频只真播，不跳进度、不伪造上报。** 平台完成条件是「观看时长 ≥ 总时长 90%」（个别课要求 100%），倍速上限只有 **2x**（官方菜单 0.75/1/1.25/1.5/2）。设 4x 会被播放器立刻重置为 1x 并暂停。不要直接请求进度上报接口——会进「学习异常」记录，代价远大于省下的时间。
 2. **默认不交卷。** `submit` 必须带 `--yes`。只有当用户明确说「完成 / 做完 / 交掉 / 提交 / 做一下」时才提交。注意：章节测验不提交就不算完成任务点，用户说「把章节学完」时它必须做。
 3. **不编造答案。** 先按课程内容作答；提交后用 `result` 回读每题得分核对，有「正确答案」时 `dump` 会自动导出 `answers-correct.json`。平台允许重做时（结果页有「修改答案」入口）才重做，且重做前必须已经知道错哪题、正确答案是什么。
 4. **不覆盖用户成绩。** 重做会覆盖上一次成绩；若已接近满分或用户没要求提分，不要重做。没有「修改答案」入口的测验一次定分，别硬试。
 5. **「学完」= 任务点全清 + 空白小节都访问过。** 目录绿勾有两个来源：有任务点的小节要等 `icon_yiwanc`（任务点全完成）；**没有任务点的小节永远显示橙色 0，必须打开一次才变绿**。另外**章节全绿 ≠ 整门课完成**，作业列表和考试是独立入口，收尾必须核查。
+6. **章节学习必须单 tab 串行，别为提速并行。**（2026-10-29 实测）同账号下并行打开两个章节页（`studentstudy?chapterId=`）会被判「多终端登录」，主 tab 被强制重定向到 `https://detect.chaoxing.com/api/monitor_temp?mes=您的账号于HH:MM在一台谷歌内核浏览器设备登入章节页面...`，正在播放的视频随之中断。**该警告页的 JS 执行会永久挂起**：`Runtime.evaluate` 无响应、proxy `/eval` 超时、curl 28，驱动表现为「日志停但进程还活着」。恢复只需 `Page.navigate` 回课程首页，不必重新登录。用「第二个 cwd + 独立 `worker-tab.txt`」能骗过脚本，**骗不过平台，等于白搭**。
 
 ## 0. 前置
 
@@ -113,6 +114,9 @@ node "$SK/scripts/quizcard.mjs" modify --yes          # 有「修改答案」入
 - 提交后的结果页是**明文**（不再混淆）。但不少课程的结果页**不显示「正确答案」**，只有「我的答案 + 得分」——错了哪题能看出来，正确答案要靠自己判断或重做一次校准。所以尽量一次做对，拿不准的先查证。
 - 部分测验结果页有「修改答案」入口可重做提分；**重做会清空简答题文本，必须重新 `filltext`**。没有该入口的一次定分。
 - 个别小节的「专题测验」不单独计为待办任务点，会随章节任务点一起被平台判完成（实测 7.7 / 8.8），`verify` 里没列出来就不用管。
+- **简答题识别陷阱（2026-10-29 实测）**：`dump` 对**纯简答/论述题**（题干下没有 `li[qid]` 选项）会落到 `mode:view`，输出看起来像「已提交结果页」。**不是**已提交——只是这类题没有客观选项给 dump 解析。要 `shot 1` 截图确认看到 UEditor 工具栏和大空白输入框，再 `filltext` 写入。提交后状态是「**待批阅**」（需教师批阅），任务点已计入完成，**不要**因为没拿到分数就去 `modify` 重做。
+- **心理实践 / 课后体验作业卡**：心理健康等课程的「X.X 心理实践」小节不是客观测验，是 1 题简答题（如「写下你的墓志铭」「怎么爱自己」）。`run` 会跳过并提示交给 quizcard——确实要这么走，按用户第一人称写 600~900 字（不要写成 AI 八股文），`filltext` 后 `submit --yes`。没有「修改答案」入口就是一次定分。
+
 
 ## 4. 作业列表（`work/list` 那条路）
 
@@ -128,7 +132,7 @@ node "$CX" redo --yes                         # 重做（覆盖上次成绩）
 node "$CX" close                              # 关掉 proxy 创建的 tab
 ```
 
-答题优先用课程自己的内容（`references/labor-course-bank.md` 有劳动教育课已核验的答案与知识点，`references/ideology-law-bank.md` 有思想道德与法治课已核验的答案），不要凭常识硬猜。
+答题优先用课程自己的内容（`references/labor-course-bank.md` 有劳动教育课已核验的答案与知识点，`references/ideology-law-bank.md` 有思想道德与法治课已核验的答案，`references/mental-health-bank.md` 有大学生心理健康教育课已核验的答案），不要凭常识硬猜。
 
 ## 5. 收尾
 
@@ -139,6 +143,8 @@ node "$SK/scripts/course-todo.mjs"          # 作业列表 + 考试列表（独�
 ```
 
 `course-todo` 会点课程首页的「作业 / 考试」导航让页面自己算出带 enc 的地址（手拼容易 404 或「无效的参数」），并打印列表与完成状态；`state.json` 里的 `home/enc` 过期时重新 `init` 一次。
+
+`visit` 会把所有「目录里还没绿勾」的小节逐个打开——**包括**那些看起来像测验但**没有任务点**的小节（实测：11.2「模块八章节测验」）。这类小节在 `verify` 的待办清单里本来就不出现，**不要**手贱再 `quizcard.mjs open` 一次当客观题做，`visit` 打开一下目录就绿了。
 
 汇报三样东西：**任务点 N/M 前后对比**、**测验/作业最终分数**、**每题答案（附一句考点）**。用户看的是结果，不是过程日志。
 
@@ -153,6 +159,10 @@ node "$SK/scripts/course-todo.mjs"          # 作业列表 + 考试列表（独�
 | 结果页「待批阅」 | 有简答/论述题，等教师批阅，不是没交上 |
 | 重做完简答题空了 | 「修改答案」会清空 UEditor 内容，重新 `filltext` 再交 |
 | 视频不动、日志停在某条 | 看是不是 `run` 进程已退出；保活只存在于 `run` 存活期间 |
+| **日志停但进程还活着，`/eval` 也超时** | **多终端登录风控**（见硬边界第 6 条）。先 `curl /targets` 看主 tab 是否被跳到 `detect.chaoxing.com`，是就 `Page.navigate` 回课程首页；同时关掉并行的第二个 tab |
+| `dump` 显示 `mode:view` 但页面写「待完成」 | 简答题没有 `li[qid]` 给 dump 解析，不是已提交。`shot 1` 确认有 UEditor 输入框，再 `filltext` |
+| `studentstudy` 报「页面未就绪」 | `#iframe` 偶发加载慢（2026-10-29 实测 9.2）。**重跑一次同一条命令**即可，不必改参数 |
+| proxy `/eval` 返回 `os error 10061` | Windows 上 proxy 子进程随 shell 回收。改用 relay 直连，或读 `.chaoxing/` 下的脚本产物判断状态 |
 
 ## 命令速查
 
@@ -181,4 +191,5 @@ node "$SK/scripts/course-todo.mjs"          # 作业列表 + 考试列表（独�
 | `references/chaoxing-dom.md` | 页面结构变了 / 要改选择器 / 排查解析失败 |
 | `references/labor-course-bank.md` | 答劳动教育课的测验题（已核验答案 + 知识点） |
 | `references/ideology-law-bank.md` | 答思想道德与法治课的专题测验（已核验答案 + 反直觉题校准） |
+| `references/mental-health-bank.md` | 答大学生心理健康教育课的章节测验（已核验 7 个测验满分答案 + 3 个简答题原文与成稿） |
 | `web-access/references/site-patterns/chaoxing.com.md` | 每次开工前（平台反作弊与 URL 约定） |
